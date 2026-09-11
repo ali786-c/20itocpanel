@@ -172,16 +172,16 @@ class MigrationOrchestrator
                 try {
                     $conn = false;
                     if (function_exists('ftp_ssl_connect')) {
-                        $conn = @ftp_ssl_connect($hostToTry, 21, 10);
+                        $conn = @\ftp_ssl_connect($hostToTry, 21, 10);
                     }
-                    if (!$conn) {
-                        $conn = @ftp_connect($hostToTry, 21, 10);
+                    if (!$conn && function_exists('ftp_connect')) {
+                        $conn = @\ftp_connect($hostToTry, 21, 10);
                     }
 
-                    if ($conn && @ftp_login($conn, $ftpUser, $ftpPass)) {
-                        ftp_pasv($conn, true);
+                    if ($conn && @\ftp_login($conn, $ftpUser, $ftpPass)) {
+                        \ftp_pasv($conn, true);
                         $this->downloadFtpDirRecursively($conn, '/public_html', $basePath . "/public_html");
-                        ftp_close($conn);
+                        \ftp_close($conn);
                         $this->logMessage($job, "   Files extracted successfully from {$hostToTry} via PHP FTP.");
                         $extracted = true;
                         break;
@@ -247,17 +247,17 @@ class MigrationOrchestrator
 
     protected function downloadFtpDirRecursively($conn, $remoteDir, $localDir) {
         if (!file_exists($localDir)) mkdir($localDir, 0777, true);
-        $contents = ftp_nlist($conn, $remoteDir);
+        $contents = \ftp_nlist($conn, $remoteDir);
         if (is_array($contents)) {
             foreach ($contents as $file) {
                 $basename = basename($file);
                 if ($basename == '.' || $basename == '..') continue;
                 $remoteFile = $remoteDir . '/' . $basename;
                 $localFile = $localDir . '/' . $basename;
-                if (ftp_size($conn, $remoteFile) == -1) {
+                if (\ftp_size($conn, $remoteFile) == -1) {
                     $this->downloadFtpDirRecursively($conn, $remoteFile, $localFile);
                 } else {
-                    ftp_get($conn, $localFile, $remoteFile, FTP_BINARY);
+                    \ftp_get($conn, $localFile, $remoteFile, FTP_BINARY);
                 }
             }
         }
@@ -303,14 +303,17 @@ class MigrationOrchestrator
 
             $this->logMessage($job, "3. Uploading {$filename} via User FTP to /home/{$username}/...");
             try {
-                $conn = @ftp_connect($destHost, 21, 15);
-                if ($conn && @ftp_login($conn, $username, $password)) {
-                    ftp_pasv($conn, true);
-                    ftp_put($conn, $filename, $localPath, FTP_BINARY);
-                    ftp_close($conn);
+                $conn = false;
+                if (function_exists('ftp_connect')) {
+                    $conn = @\ftp_connect($destHost, 21, 15);
+                }
+                if ($conn && @\ftp_login($conn, $username, $password)) {
+                    \ftp_pasv($conn, true);
+                    \ftp_put($conn, $filename, $localPath, FTP_BINARY);
+                    \ftp_close($conn);
                     $this->logMessage($job, "   Upload complete for {$domain} via FTP.");
                 } else {
-                    $this->logMessage($job, "   FTP upload failed (port 21 issue). Attempting CURL fallback...");
+                    $this->logMessage($job, "   FTP upload failed (port 21 issue or missing extension). Attempting CURL fallback...");
                     $cmd = "curl -T " . escapeshellarg($localPath) . " ftp://" . escapeshellarg($username) . ":" . escapeshellarg($password) . "@" . escapeshellarg($destHost) . "/" . escapeshellarg($filename) . " --ftp-create-dirs --ftp-pasv -s";
                     exec($cmd, $output, $returnVar);
                     if ($returnVar === 0) {
