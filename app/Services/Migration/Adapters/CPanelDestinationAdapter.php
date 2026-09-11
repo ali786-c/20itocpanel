@@ -178,10 +178,12 @@ class CPanelDestinationAdapter implements DestinationAdapterInterface
 
     public function extractZip(string $username, string $dir, string $filename): array
     {
-        // Use cPanel API 2 Fileman::extract
-        return $this->executeUapi($username, 'Fileman', 'extract', [
-            'dir' => $dir,
-            'files' => $filename,
+        // Use cPanel API 2 Fileman::fileop with op=extract
+        return $this->executeUapi($username, 'Fileman', 'fileop', [
+            'op' => 'extract',
+            'sourcefiles' => $filename,
+            'destdir' => $dir,
+            'doubledecode' => 1,
         ], 2);
     }
 
