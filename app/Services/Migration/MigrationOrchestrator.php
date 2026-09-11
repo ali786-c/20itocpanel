@@ -248,14 +248,21 @@ class MigrationOrchestrator
 
             $this->logMessage($job, "3. Uploading {$filename} via User FTP to /home/{$username}/...");
             try {
-                $conn = @ftp_connect($destHost, 21, 10);
+                $conn = @ftp_connect($destHost, 21, 15);
                 if ($conn && @ftp_login($conn, $username, $password)) {
                     ftp_pasv($conn, true);
                     ftp_put($conn, $filename, $localPath, FTP_BINARY);
                     ftp_close($conn);
-                    $this->logMessage($job, "   Upload complete for {$domain}.");
+                    $this->logMessage($job, "   Upload complete for {$domain} via FTP.");
                 } else {
-                    $this->logMessage($job, "   FTP upload failed to new cPanel account (check server FTP port 21).", 'error');
+                    $this->logMessage($job, "   FTP upload failed (port 21 issue). Attempting CURL fallback...");
+                    $cmd = "curl -T " . escapeshellarg($localPath) . " ftp://" . escapeshellarg($username) . ":" . escapeshellarg($password) . "@" . escapeshellarg($destHost) . "/" . escapeshellarg($filename) . " --ftp-create-dirs --ftp-pasv -s";
+                    exec($cmd, $output, $returnVar);
+                    if ($returnVar === 0) {
+                        $this->logMessage($job, "   Upload complete for {$domain} via CURL FTP.");
+                    } else {
+                        $this->logMessage($job, "   CURL FTP upload also failed. Code: {$returnVar}", 'error');
+                    }
                 }
             } catch (\Exception $e) {
                 $this->logMessage($job, "   FTP Transfer Error: " . $e->getMessage(), 'error');
@@ -283,7 +290,7 @@ class MigrationOrchestrator
             if (!$username) continue;
 
             $this->logMessage($job, "1. Triggering UAPI Fileman::extract for {$filename}...");
-            $extractRes = $this->destinationAdapter->extractZip($username, "/home/{$username}/{$filename}", "/home/{$username}/");
+            $extractRes = $this->destinationAdapter->extractZip($username, "/home/{$username}", $filename);
             
             if ($extractRes['success']) {
                 $this->logMessage($job, "   Files extracted successfully into public_html.");
@@ -292,7 +299,9 @@ class MigrationOrchestrator
             }
 
             $this->logMessage($job, "2. Creating Database via UAPI Mysql::create_database...");
-            $dbName = substr($username, 0, 7) . "_wp" . rand(10, 99);
+            // Fix: DB prefix must match exact cPanel username
+            $dbName = $username . "_wp" . rand(10, 99);
+            // Ensure username is not too long (MySQL limits to 16 chars usually for DB user)
             $dbUser = substr($username, 0, 7) . "_u" . rand(10, 99);
             $dbPass = substr(str_shuffle('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$'), 0, 12);
             

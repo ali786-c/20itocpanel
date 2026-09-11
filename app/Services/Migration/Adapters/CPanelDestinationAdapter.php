@@ -120,13 +120,13 @@ class CPanelDestinationAdapter implements DestinationAdapterInterface
         return ['success' => false, 'message' => 'Deprecated in Reseller Arch.'];
     }
 
-    public function executeUapi(string $username, string $module, string $function, array $params = []): array
+    public function executeUapi(string $username, string $module, string $function, array $params = [], int $apiVer = 3): array
     {
         try {
             $payload = array_merge([
                 'api.version' => 1,
                 'cpanel_jsonapi_user' => $username,
-                'cpanel_jsonapi_apiversion' => 3,
+                'cpanel_jsonapi_apiversion' => $apiVer,
                 'cpanel_jsonapi_module' => $module,
                 'cpanel_jsonapi_func' => $function,
             ], $params);
@@ -135,6 +135,16 @@ class CPanelDestinationAdapter implements DestinationAdapterInterface
 
             if ($response->successful()) {
                 $data = $response->json();
+                
+                // API 2 returns 'cpanelresult' instead of 'result'
+                if ($apiVer == 2) {
+                    $result = $data['cpanelresult'] ?? null;
+                    if ($result && !isset($result['error'])) {
+                        return ['success' => true, 'data' => $result['data'] ?? [], 'message' => 'API2 call successful'];
+                    }
+                    return ['success' => false, 'message' => $result['error'] ?? 'Unknown API2 Error'];
+                }
+
                 $result = $data['result'] ?? null;
                 
                 if ($result && isset($result['status']) && $result['status'] == 1) {
@@ -158,7 +168,7 @@ class CPanelDestinationAdapter implements DestinationAdapterInterface
             ];
             
         } catch (\Exception $e) {
-            \Illuminate\Support\Facades\Log::error("UAPI Exception ({$module}::{$function}): " . $e->getMessage());
+            \Illuminate\Support\Facades\Log::error("UAPI/API2 Exception ({$module}::{$function}): " . $e->getMessage());
             return [
                 'success' => false,
                 'message' => $e->getMessage()
@@ -166,12 +176,13 @@ class CPanelDestinationAdapter implements DestinationAdapterInterface
         }
     }
 
-    public function extractZip(string $username, string $zipPath, string $destPath): array
+    public function extractZip(string $username, string $dir, string $filename): array
     {
+        // Use cPanel API 2 Fileman::extract
         return $this->executeUapi($username, 'Fileman', 'extract', [
-            'file' => $zipPath,
-            'dir' => $destPath,
-        ]);
+            'dir' => $dir,
+            'files' => $filename,
+        ], 2);
     }
 
     public function createDatabase(string $username, string $dbName): array
