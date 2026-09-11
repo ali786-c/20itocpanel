@@ -123,13 +123,13 @@ class MigrationOrchestrator
         $manifest = $job->source_manifest ?? [];
         $this->logMessage($job, "Starting Data Extraction (Reseller Architecture)...");
 
-        // Fallbacks for testing
-        $ftpHost = parse_url($job->sourceConnection->hostname, PHP_URL_HOST) ?? $job->sourceConnection->hostname;
-        $ftpUser = 'demo_user'; 
-        $ftpPass = 'demo_pass';
+        // Use the 20i SourceAdapter to fetch real FTP credentials dynamically
+        $sourceAdapter = app(\App\Contracts\Migration\SourceAdapterInterface::class);
+        $sourceAdapter->setConnection($job->sourceConnection);
 
         foreach ($manifest as &$pkg) {
             $domain = $pkg['name'] ?? $pkg['domain'] ?? 'domain.com';
+            $packageId = $pkg['id'] ?? null;
             
             $username = substr(preg_replace('/[^a-zA-Z0-9]/', '', $domain), 0, 8);
             if (!preg_match('/^[a-zA-Z]/', $username)) $username = 'c' . substr($username, 0, 7);
@@ -137,21 +137,51 @@ class MigrationOrchestrator
 
             $this->logMessage($job, "Building standard backup archive for domain: {$domain} (Username: {$username})");
             
+            // 1. Fetch REAL FTP Credentials from 20i
+            $ftpHost = 'ftp.stackcp.com';
+            $ftpUser = 'demo_user';
+            $ftpPass = 'demo_pass';
+            
+            if ($packageId) {
+                $this->logMessage($job, "Fetching 20i package details to retrieve real FTP credentials...");
+                $pkgData = $sourceAdapter->getInventory($packageId);
+                
+                $ftpHost = $pkgData['web']['info']['ftpserver'] ?? $ftpHost;
+                $credentials = $pkgData['web']['ftp_credentials'] ?? [];
+                if (!empty($credentials) && isset($credentials[0])) {
+                    $ftpUser = $credentials[0]['username'] ?? $ftpUser;
+                    $ftpPass = $credentials[0]['password'] ?? $ftpPass;
+                    $this->logMessage($job, "Successfully retrieved Real FTP credentials for {$ftpUser}.");
+                } else {
+                    $this->logMessage($job, "Could not find FTP credentials in 20i API response.", 'warning');
+                }
+            }
+            
             $basePath = storage_path("app/migrations/backup-{$username}");
             if (file_exists($basePath)) exec("rm -rf " . escapeshellarg($basePath));
             mkdir($basePath . "/public_html", 0777, true);
 
             $this->logMessage($job, "1. Extracting files from 20i via FTP...");
+            // Hint to user about FTP Lock
+            $this->logMessage($job, "NOTE: If FTP fails, ensure 'FTP Lock' is disabled for this package in your 20i Reseller Panel!");
             try {
-                $conn = @ftp_connect($ftpHost, 21, 5);
+                $conn = @ftp_connect($ftpHost, 21, 15);
                 if ($conn && @ftp_login($conn, $ftpUser, $ftpPass)) {
                     ftp_pasv($conn, true);
                     $this->downloadFtpDirRecursively($conn, '/public_html', $basePath . "/public_html");
                     ftp_close($conn);
                     $this->logMessage($job, "   Files extracted successfully from FTP.");
                 } else {
-                    $this->logMessage($job, "   FTP Connection failed. Writing fallback index.php...");
-                    file_put_contents($basePath . "/public_html/index.php", "<?php echo 'Migrated via SaaS (Reseller Arch)!'; ?>");
+                    $this->logMessage($job, "   PHP FTP failed. Attempting CURL fallback for extraction...");
+                    // Fallback to wget/curl for recursive download
+                    $cmd = "wget -m -nH --cut-dirs=1 -P " . escapeshellarg($basePath . "/public_html") . " ftp://" . escapeshellarg($ftpUser) . ":" . escapeshellarg($ftpPass) . "@" . escapeshellarg($ftpHost) . "/public_html/ 2>&1";
+                    exec($cmd, $output, $returnVar);
+                    if ($returnVar === 0 || strpos(implode(" ", $output), 'Downloaded:') !== false) {
+                        $this->logMessage($job, "   Files extracted successfully via Wget FTP.");
+                    } else {
+                        $this->logMessage($job, "   FTP Connection totally failed. Writing fallback index.php... (Check 20i FTP Lock!)", 'error');
+                        file_put_contents($basePath . "/public_html/index.php", "<?php echo 'Migrated via SaaS (Reseller Arch) - Data Extraction Failed! Check 20i FTP Lock!'; ?>");
+                    }
                 }
             } catch (\Exception $e) {
                 $this->logMessage($job, "   FTP Error: " . $e->getMessage(), 'error');
