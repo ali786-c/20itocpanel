@@ -162,29 +162,54 @@ class MigrationOrchestrator
             mkdir($basePath . "/public_html", 0777, true);
 
             $this->logMessage($job, "1. Extracting files from 20i via FTP...");
-            // Hint to user about FTP Lock
             $this->logMessage($job, "NOTE: If FTP fails, ensure 'FTP Lock' is disabled for this package in your 20i Reseller Panel!");
-            try {
-                $conn = @ftp_connect($ftpHost, 21, 15);
-                if ($conn && @ftp_login($conn, $ftpUser, $ftpPass)) {
-                    ftp_pasv($conn, true);
-                    $this->downloadFtpDirRecursively($conn, '/public_html', $basePath . "/public_html");
-                    ftp_close($conn);
-                    $this->logMessage($job, "   Files extracted successfully from FTP.");
-                } else {
-                    $this->logMessage($job, "   PHP FTP failed. Attempting CURL fallback for extraction...");
-                    // Fallback to wget/curl for recursive download
-                    $cmd = "wget -m -nH --cut-dirs=1 -P " . escapeshellarg($basePath . "/public_html") . " ftp://" . escapeshellarg($ftpUser) . ":" . escapeshellarg($ftpPass) . "@" . escapeshellarg($ftpHost) . "/public_html/ 2>&1";
+            
+            $ftpHostsToTry = [$ftpHost, 'ftp.' . $domain, $domain];
+            $extracted = false;
+
+            foreach ($ftpHostsToTry as $hostToTry) {
+                $this->logMessage($job, "   Trying FTP connection to {$hostToTry}...");
+                try {
+                    $conn = false;
+                    if (function_exists('ftp_ssl_connect')) {
+                        $conn = @ftp_ssl_connect($hostToTry, 21, 10);
+                    }
+                    if (!$conn) {
+                        $conn = @ftp_connect($hostToTry, 21, 10);
+                    }
+
+                    if ($conn && @ftp_login($conn, $ftpUser, $ftpPass)) {
+                        ftp_pasv($conn, true);
+                        $this->downloadFtpDirRecursively($conn, '/public_html', $basePath . "/public_html");
+                        ftp_close($conn);
+                        $this->logMessage($job, "   Files extracted successfully from {$hostToTry} via PHP FTP.");
+                        $extracted = true;
+                        break;
+                    }
+                } catch (\Exception $e) {
+                    $this->logMessage($job, "   PHP FTP Error on {$hostToTry}: " . $e->getMessage());
+                }
+
+                if (!$extracted) {
+                    $this->logMessage($job, "   PHP FTP failed on {$hostToTry}. Attempting Wget fallback...");
+                    $cmd = "wget -m -nH --cut-dirs=1 -P " . escapeshellarg($basePath . "/public_html") . " ftp://" . escapeshellarg($ftpUser) . ":" . escapeshellarg($ftpPass) . "@" . escapeshellarg($hostToTry) . "/public_html/ 2>&1";
                     exec($cmd, $output, $returnVar);
-                    if ($returnVar === 0 || strpos(implode(" ", $output), 'Downloaded:') !== false) {
-                        $this->logMessage($job, "   Files extracted successfully via Wget FTP.");
+                    $outputStr = implode(" ", $output);
+                    
+                    if ($returnVar === 0 || strpos($outputStr, 'Downloaded:') !== false || strpos($outputStr, 'saved') !== false) {
+                        $this->logMessage($job, "   Files extracted successfully via Wget from {$hostToTry}.");
+                        $extracted = true;
+                        break;
                     } else {
-                        $this->logMessage($job, "   FTP Connection totally failed. Writing fallback index.php... (Check 20i FTP Lock!)", 'error');
-                        file_put_contents($basePath . "/public_html/index.php", "<?php echo 'Migrated via SaaS (Reseller Arch) - Data Extraction Failed! Check 20i FTP Lock!'; ?>");
+                        $this->logMessage($job, "   Wget failed on {$hostToTry}. Log: " . substr($outputStr, 0, 200));
+                        $output = []; // reset for next iteration
                     }
                 }
-            } catch (\Exception $e) {
-                $this->logMessage($job, "   FTP Error: " . $e->getMessage(), 'error');
+            }
+
+            if (!$extracted) {
+                $this->logMessage($job, "   FTP Connection totally failed. Writing fallback index.php... (Check 20i FTP Lock!)", 'error');
+                file_put_contents($basePath . "/public_html/index.php", "<?php echo 'Migrated via SaaS (Reseller Arch) - Data Extraction Failed! Check 20i FTP Lock!'; ?>");
             }
             
             $this->logMessage($job, "2. Triggering mysqldump on 20i...");
