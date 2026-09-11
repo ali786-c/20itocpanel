@@ -116,26 +116,39 @@ class CPanelDestinationAdapter implements DestinationAdapterInterface
 
     public function restoreAccount(string $username): array
     {
+        // ... previous restoreAccount code (unused in new arch but keep it)
+        return ['success' => false, 'message' => 'Deprecated in Reseller Arch.'];
+    }
+
+    public function executeUapi(string $username, string $module, string $function, array $params = []): array
+    {
         try {
-            // WHM API 1 restoreaccount will automatically look for /home/cpmove-$username.tar.gz
-            $response = $this->getClient()->get('/restoreaccount', [
+            $payload = array_merge([
                 'api.version' => 1,
-                'user' => $username,
-            ]);
+                'cpanel_jsonapi_user' => $username,
+                'cpanel_jsonapi_apiversion' => 3,
+                'cpanel_jsonapi_module' => $module,
+                'cpanel_jsonapi_func' => $function,
+            ], $params);
+
+            $response = $this->getClient()->get('/cpanel', $payload);
 
             if ($response->successful()) {
                 $data = $response->json();
-                if (isset($data['metadata']['result']) && $data['metadata']['result'] == 1) {
+                $result = $data['result'] ?? null;
+                
+                if ($result && isset($result['status']) && $result['status'] == 1) {
                     return [
                         'success' => true,
-                        'message' => 'Account restored successfully',
-                        'data' => $data['data'] ?? []
+                        'data' => $result['data'] ?? [],
+                        'message' => 'UAPI call successful',
                     ];
                 }
                 
+                $errors = $result['errors'] ?? ['Unknown UAPI Error'];
                 return [
                     'success' => false,
-                    'message' => $data['metadata']['reason'] ?? 'Unknown error restoring account',
+                    'message' => is_array($errors) ? implode(", ", $errors) : $errors
                 ];
             }
 
@@ -145,11 +158,43 @@ class CPanelDestinationAdapter implements DestinationAdapterInterface
             ];
             
         } catch (\Exception $e) {
-            \Illuminate\Support\Facades\Log::error('WHM Restore Account Exception: ' . $e->getMessage());
+            \Illuminate\Support\Facades\Log::error("UAPI Exception ({$module}::{$function}): " . $e->getMessage());
             return [
                 'success' => false,
                 'message' => $e->getMessage()
             ];
         }
+    }
+
+    public function extractZip(string $username, string $zipPath, string $destPath): array
+    {
+        return $this->executeUapi($username, 'Fileman', 'extract', [
+            'file' => $zipPath,
+            'dir' => $destPath,
+        ]);
+    }
+
+    public function createDatabase(string $username, string $dbName): array
+    {
+        return $this->executeUapi($username, 'Mysql', 'create_database', [
+            'name' => $dbName,
+        ]);
+    }
+
+    public function createDatabaseUser(string $username, string $dbUser, string $dbPass): array
+    {
+        return $this->executeUapi($username, 'Mysql', 'create_user', [
+            'name' => $dbUser,
+            'password' => $dbPass,
+        ]);
+    }
+
+    public function grantDatabasePrivileges(string $username, string $dbUser, string $dbName): array
+    {
+        return $this->executeUapi($username, 'Mysql', 'set_privileges_on_database', [
+            'user' => $dbUser,
+            'database' => $dbName,
+            'privileges' => 'ALL PRIVILEGES',
+        ]);
     }
 }
