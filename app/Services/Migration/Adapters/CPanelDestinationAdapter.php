@@ -113,4 +113,43 @@ class CPanelDestinationAdapter implements DestinationAdapterInterface
             return false;
         }
     }
+
+    public function restoreAccount(string $username): array
+    {
+        try {
+            // WHM API 1 restoreaccount will automatically look for /home/cpmove-$username.tar.gz
+            $response = $this->getClient()->get('/restoreaccount', [
+                'api.version' => 1,
+                'user' => $username,
+            ]);
+
+            if ($response->successful()) {
+                $data = $response->json();
+                if (isset($data['metadata']['result']) && $data['metadata']['result'] == 1) {
+                    return [
+                        'success' => true,
+                        'message' => 'Account restored successfully',
+                        'data' => $data['data'] ?? []
+                    ];
+                }
+                
+                return [
+                    'success' => false,
+                    'message' => $data['metadata']['reason'] ?? 'Unknown error restoring account',
+                ];
+            }
+
+            return [
+                'success' => false,
+                'message' => 'API HTTP Error: ' . $response->status() . ' ' . $response->body()
+            ];
+            
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error('WHM Restore Account Exception: ' . $e->getMessage());
+            return [
+                'success' => false,
+                'message' => $e->getMessage()
+            ];
+        }
+    }
 }
