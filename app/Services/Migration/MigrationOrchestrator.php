@@ -172,16 +172,30 @@ class MigrationOrchestrator
                 
                 // Primary Method: Wget (Most reliable on VPS for passive FTP)
                 $cmd = "wget -m -nH --cut-dirs=1 -P " . escapeshellarg($basePath . "/public_html") . " ftp://" . escapeshellarg($ftpUser) . ":" . escapeshellarg($ftpPass) . "@" . escapeshellarg($hostToTry) . "/public_html/ 2>&1";
-                exec($cmd, $output, $returnVar);
-                $outputStr = implode(" ", $output);
                 
-                if ($returnVar === 0 || strpos($outputStr, 'Downloaded:') !== false || strpos($outputStr, 'saved') !== false || file_exists($basePath . "/public_html/wp-config.php") || file_exists($basePath . "/public_html/index.php")) {
-                    $this->logMessage($job, "   Files extracted successfully via Wget from {$hostToTry}.");
+                $process = \Symfony\Component\Process\Process::fromShellCommandline($cmd);
+                $process->setTimeout(3600); // 1 hour timeout for large sites
+                
+                $fileCount = 0;
+                $outputStr = "";
+                
+                $process->run(function ($type, $buffer) use ($job, &$fileCount, &$outputStr) {
+                    $outputStr .= $buffer;
+                    // Wget prints 'saved' or 'RETR' when a file is downloaded
+                    if (strpos($buffer, 'saved') !== false || strpos($buffer, 'RETR') !== false) {
+                        $fileCount++;
+                        if ($fileCount % 50 === 0) {
+                            $this->logMessage($job, "   ...Downloaded {$fileCount} files via WGET so far...");
+                        }
+                    }
+                });
+
+                if ($process->isSuccessful() || strpos($outputStr, 'Downloaded:') !== false || strpos($outputStr, 'saved') !== false || file_exists($basePath . "/public_html/wp-config.php") || file_exists($basePath . "/public_html/index.php")) {
+                    $this->logMessage($job, "   Files extracted successfully ({$fileCount} files) via Wget from {$hostToTry}.");
                     $extracted = true;
                     break;
                 } else {
                     $this->logMessage($job, "   Wget failed on {$hostToTry}. Attempting PHP FTP Fallback...");
-                    $output = []; // Reset
                     
                     // Fallback: PHP FTP
                     try {
@@ -195,10 +209,10 @@ class MigrationOrchestrator
 
                         if ($conn && @\ftp_login($conn, $ftpUser, $ftpPass)) {
                             \ftp_pasv($conn, true);
-                            $fileCount = 0;
-                            $this->downloadFtpDirRecursively($conn, '/public_html', $basePath . "/public_html", $fileCount, $job);
+                            $phpFileCount = 0;
+                            $this->downloadFtpDirRecursively($conn, '/public_html', $basePath . "/public_html", $phpFileCount, $job);
                             \ftp_close($conn);
-                            $this->logMessage($job, "   Files extracted successfully ({$fileCount} files) from {$hostToTry} via PHP FTP.");
+                            $this->logMessage($job, "   Files extracted successfully ({$phpFileCount} files) from {$hostToTry} via PHP FTP.");
                             $extracted = true;
                             break;
                         }
