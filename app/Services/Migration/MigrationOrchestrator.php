@@ -168,42 +168,42 @@ class MigrationOrchestrator
             $extracted = false;
 
             foreach ($ftpHostsToTry as $hostToTry) {
-                $this->logMessage($job, "   Trying FTP connection to {$hostToTry}...");
-                try {
-                    $conn = false;
-                    if (function_exists('ftp_ssl_connect')) {
-                        $conn = @\ftp_ssl_connect($hostToTry, 21, 10);
-                    }
-                    if (!$conn && function_exists('ftp_connect')) {
-                        $conn = @\ftp_connect($hostToTry, 21, 10);
-                    }
-
-                    if ($conn && @\ftp_login($conn, $ftpUser, $ftpPass)) {
-                        \ftp_pasv($conn, true);
-                        $fileCount = 0;
-                        $this->downloadFtpDirRecursively($conn, '/public_html', $basePath . "/public_html", $fileCount, $job);
-                        \ftp_close($conn);
-                        $this->logMessage($job, "   Files extracted successfully ({$fileCount} files) from {$hostToTry} via PHP FTP.");
-                        $extracted = true;
-                        break;
-                    }
-                } catch (\Exception $e) {
-                    $this->logMessage($job, "   PHP FTP Error on {$hostToTry}: " . $e->getMessage());
-                }
-
-                if (!$extracted) {
-                    $this->logMessage($job, "   PHP FTP failed on {$hostToTry}. Attempting Wget fallback...");
-                    $cmd = "wget -m -nH --cut-dirs=1 -P " . escapeshellarg($basePath . "/public_html") . " ftp://" . escapeshellarg($ftpUser) . ":" . escapeshellarg($ftpPass) . "@" . escapeshellarg($hostToTry) . "/public_html/ 2>&1";
-                    exec($cmd, $output, $returnVar);
-                    $outputStr = implode(" ", $output);
+                $this->logMessage($job, "   Trying WGET extraction from {$hostToTry}...");
+                
+                // Primary Method: Wget (Most reliable on VPS for passive FTP)
+                $cmd = "wget -m -nH --cut-dirs=1 -P " . escapeshellarg($basePath . "/public_html") . " ftp://" . escapeshellarg($ftpUser) . ":" . escapeshellarg($ftpPass) . "@" . escapeshellarg($hostToTry) . "/public_html/ 2>&1";
+                exec($cmd, $output, $returnVar);
+                $outputStr = implode(" ", $output);
+                
+                if ($returnVar === 0 || strpos($outputStr, 'Downloaded:') !== false || strpos($outputStr, 'saved') !== false || file_exists($basePath . "/public_html/wp-config.php") || file_exists($basePath . "/public_html/index.php")) {
+                    $this->logMessage($job, "   Files extracted successfully via Wget from {$hostToTry}.");
+                    $extracted = true;
+                    break;
+                } else {
+                    $this->logMessage($job, "   Wget failed on {$hostToTry}. Attempting PHP FTP Fallback...");
+                    $output = []; // Reset
                     
-                    if ($returnVar === 0 || strpos($outputStr, 'Downloaded:') !== false || strpos($outputStr, 'saved') !== false) {
-                        $this->logMessage($job, "   Files extracted successfully via Wget from {$hostToTry}.");
-                        $extracted = true;
-                        break;
-                    } else {
-                        $this->logMessage($job, "   Wget failed on {$hostToTry}. Log: " . substr($outputStr, 0, 200));
-                        $output = []; // reset for next iteration
+                    // Fallback: PHP FTP
+                    try {
+                        $conn = false;
+                        if (function_exists('ftp_ssl_connect')) {
+                            $conn = @\ftp_ssl_connect($hostToTry, 21, 5);
+                        }
+                        if (!$conn && function_exists('ftp_connect')) {
+                            $conn = @\ftp_connect($hostToTry, 21, 5);
+                        }
+
+                        if ($conn && @\ftp_login($conn, $ftpUser, $ftpPass)) {
+                            \ftp_pasv($conn, true);
+                            $fileCount = 0;
+                            $this->downloadFtpDirRecursively($conn, '/public_html', $basePath . "/public_html", $fileCount, $job);
+                            \ftp_close($conn);
+                            $this->logMessage($job, "   Files extracted successfully ({$fileCount} files) from {$hostToTry} via PHP FTP.");
+                            $extracted = true;
+                            break;
+                        }
+                    } catch (\Exception $e) {
+                        $this->logMessage($job, "   PHP FTP Error on {$hostToTry}: " . $e->getMessage());
                     }
                 }
             }
