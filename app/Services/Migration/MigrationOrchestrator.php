@@ -180,9 +180,10 @@ class MigrationOrchestrator
 
                     if ($conn && @\ftp_login($conn, $ftpUser, $ftpPass)) {
                         \ftp_pasv($conn, true);
-                        $this->downloadFtpDirRecursively($conn, '/public_html', $basePath . "/public_html");
+                        $fileCount = 0;
+                        $this->downloadFtpDirRecursively($conn, '/public_html', $basePath . "/public_html", $fileCount, $job);
                         \ftp_close($conn);
-                        $this->logMessage($job, "   Files extracted successfully from {$hostToTry} via PHP FTP.");
+                        $this->logMessage($job, "   Files extracted successfully ({$fileCount} files) from {$hostToTry} via PHP FTP.");
                         $extracted = true;
                         break;
                     }
@@ -245,7 +246,7 @@ class MigrationOrchestrator
         $this->process($job);
     }
 
-    protected function downloadFtpDirRecursively($conn, $remoteDir, $localDir) {
+    protected function downloadFtpDirRecursively($conn, $remoteDir, $localDir, &$fileCount = 0, $job = null) {
         if (!file_exists($localDir)) mkdir($localDir, 0777, true);
         $contents = \ftp_nlist($conn, $remoteDir);
         if (is_array($contents)) {
@@ -254,10 +255,15 @@ class MigrationOrchestrator
                 if ($basename == '.' || $basename == '..') continue;
                 $remoteFile = $remoteDir . '/' . $basename;
                 $localFile = $localDir . '/' . $basename;
+                
                 if (\ftp_size($conn, $remoteFile) == -1) {
-                    $this->downloadFtpDirRecursively($conn, $remoteFile, $localFile);
+                    $this->downloadFtpDirRecursively($conn, $remoteFile, $localFile, $fileCount, $job);
                 } else {
                     \ftp_get($conn, $localFile, $remoteFile, FTP_BINARY);
+                    $fileCount++;
+                    if ($fileCount % 50 === 0 && $job) {
+                        $this->logMessage($job, "   ...Downloaded {$fileCount} files via FTP so far...");
+                    }
                 }
             }
         }
